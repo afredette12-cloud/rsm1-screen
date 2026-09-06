@@ -1,0 +1,198 @@
+<!--
+  rf_rsm1h screen player
+  ----------------------
+  Publish this file on any https address and put that address in config.lua:
+
+      playerUrl = 'https://yourname.github.io/rf-screen/'
+
+  GitHub Pages works and is free:
+    1. Make a public repo
+    2. Add this file as index.html
+    3. Settings -> Pages -> deploy from the main branch
+    4. Paste the resulting URL into playerUrl
+
+  Why: YouTube refuses an embed whose page has no real http origin. A DUI
+  served from nui:// has none, which is what "Error 153" is telling you.
+  Hosting the page anywhere on https gives it one.
+
+  The pad drives this page through SendDuiMessage, so nothing here needs
+  configuring - it just has to be reachable.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- YouTube error 153 means the embed reached it without a usable Referer.
+     A no-referrer policy guarantees that, so ask for the one YouTube wants. -->
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%;
+               background: #000; overflow: hidden; }
+  #stage { position: absolute; inset: 0; }
+  #stage > * { position: absolute; inset: 0; width: 100%; height: 100%;
+               border: 0; object-fit: contain; background: #000; }
+  #idle { display: grid; place-items: center; color: #2a2a30;
+          font: 300 34px system-ui, sans-serif; letter-spacing: .18em; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="idle">NO SIGNAL</div></div>
+<script>
+/* Runs inside the DUI, not the pad. Shows one video on the screen prop.
+   The pad talks to it through SendDuiMessage. */
+(function () {
+  'use strict';
+
+  var stage = document.getElementById('stage');
+  var cur   = null;          // { kind, el, api }
+  var want  = { url: null, seek: 0, playing: false, volume: 1 };
+
+  function clear() {
+    stage.innerHTML = '';
+    cur = null;
+  }
+
+  function idle() {
+    clear();
+    var d = document.createElement('div');
+    d.id = 'idle';
+    d.textContent = 'NO SIGNAL';
+    stage.appendChild(d);
+  }
+
+  // ---- what kind of link is this ----------------------------------------
+  function youtubeId(u) {
+    var m = u.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{11})/);
+    return m ? m[1] : null;
+  }
+
+  function twitchChannel(u) {
+    var m = u.match(/twitch\.tv\/([A-Za-z0-9_]+)/);
+    return (m && m[1] !== 'videos') ? m[1] : null;
+  }
+
+  function twitchVideo(u) {
+    var m = u.match(/twitch\.tv\/videos\/(\d+)/);
+    return m ? m[1] : null;
+  }
+
+  // ---- players -----------------------------------------------------------
+  function playFile(url) {
+    clear();
+    var v = document.createElement('video');
+    v.src = url;
+    v.autoplay = true;
+    v.loop = false;
+    v.muted = want.muted;           // muted when the pad handles audio in 3D
+    v.volume = want.volume;
+    v.playsInline = true;
+    v.addEventListener('loadedmetadata', function () {
+      if (want.seek > 0 && isFinite(v.duration) && v.duration > 0) {
+        try { v.currentTime = want.seek % v.duration; } catch (e) {}
+      }
+      v.play().catch(function () {});
+    });
+    stage.appendChild(v);
+    cur = { kind: 'file', el: v };
+  }
+
+  // Error 153 is YouTube refusing an embed that reached it without a usable
+  // Referer. A DUI page is served from nui://, which is not an http origin,
+  // so there is nothing valid to send. These are the documented mitigations;
+  // if they do not take, the answer is `origin` in the config - a real https
+  // page - or resolving the video to a direct file server-side.
+  function playYouTube(id) {
+    clear();
+    var host = want.nocookie ? 'https://www.youtube-nocookie.com'
+                             : 'https://www.youtube.com';
+    var ref  = want.origin || 'https://www.youtube.com';
+
+    var p = ['autoplay=1', 'controls=0', 'modestbranding=1', 'rel=0', 'playsinline=1',
+             'disablekb=1', 'fs=0', 'iv_load_policy=3',
+             'origin=' + encodeURIComponent(ref),
+             'widget_referrer=' + encodeURIComponent(ref),
+             'start=' + Math.floor(want.seek),
+             'mute=' + (want.muted ? 1 : 0)];
+
+    var f = document.createElement('iframe');
+    f.src = host + '/embed/' + id + '?' + p.join('&');
+    f.allow = 'autoplay; encrypted-media; picture-in-picture';
+    f.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+    f.setAttribute('frameborder', '0');
+    stage.appendChild(f);
+    cur = { kind: 'youtube', el: f };
+  }
+
+  function playTwitch(url) {
+    clear();
+    var ch = twitchChannel(url), vid = twitchVideo(url);
+    var f  = document.createElement('iframe');
+    var q  = ['parent=cfx.re', 'parent=localhost', 'autoplay=true',
+              'muted=' + (want.muted ? 'true' : 'false')];
+    if (vid)      q.unshift('video=' + vid);
+    else if (ch)  q.unshift('channel=' + ch);
+    f.src = 'https://player.twitch.tv/?' + q.join('&');
+    f.allow = 'autoplay; encrypted-media';
+    f.setAttribute('frameborder', '0');
+    stage.appendChild(f);
+    cur = { kind: 'twitch', el: f };
+  }
+
+  function start() {
+    if (!want.url || !want.playing) { idle(); return; }
+
+    var yt = youtubeId(want.url);
+    if (yt) return playYouTube(yt);
+    if (/twitch\.tv/i.test(want.url)) return playTwitch(want.url);
+    playFile(want.url);
+  }
+
+  // ---- the pad talks to us ----------------------------------------------
+  window.addEventListener('message', function (e) {
+    var d = e.data || {};
+
+    if (d.action === 'show') {
+      var changed = (d.url !== want.url) || (d.playing !== want.playing)
+                 || (d.muted !== want.muted);
+      want.url     = d.url || null;
+      want.playing = !!d.playing;
+      want.seek    = d.seek || 0;
+      want.muted   = d.muted !== false;
+      want.volume  = (d.volume == null ? 1 : d.volume);
+      want.origin  = d.origin || null;
+      want.nocookie = !!d.nocookie;
+      if (changed) start();
+      return;
+    }
+
+    // distance falloff for anything we cannot route through the 3D graph
+    if (d.action === 'volume') {
+      want.volume = d.volume;
+      if (cur && cur.kind === 'file' && cur.el) cur.el.volume = d.volume;
+      return;
+    }
+
+    if (d.action === 'stop') {
+      want.playing = false;
+      idle();
+      return;
+    }
+
+    // keep the picture with the server clock after a long stall
+    if (d.action === 'resync' && cur && cur.kind === 'file' && cur.el) {
+      var v = cur.el;
+      if (isFinite(v.duration) && v.duration > 0) {
+        var target = d.seek % v.duration;
+        if (Math.abs(v.currentTime - target) > 1.5) {
+          try { v.currentTime = target; } catch (e) {}
+        }
+      }
+    }
+  });
+
+  idle();
+})();
+
+</script>
+</body>
+</html>
