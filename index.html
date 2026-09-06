@@ -1,5 +1,5 @@
 <!--
-  rf_rsm1h screen player  -  version 1.39.0
+  rf_rsm1h screen player  -  version 1.40.0
   Published at https://afredette12-cloud.github.io/rsm1-screen/
   REPLACE index.html IN THE REPO WITH THIS FILE.
 -->
@@ -42,7 +42,7 @@
   // The version is on screen so a stale hosted page is obvious at a glance -
   // this page lives outside the resource, so restarting the script cannot
   // update it and there is otherwise no way to tell which one is deployed.
-  var PLAYER_VERSION = '1.39.0';
+  var PLAYER_VERSION = '1.40.0';
 
   function idle() {
     clear();
@@ -115,15 +115,34 @@
     q.forEach(function (fn) { fn(); });
   };
 
+  // YouTube mutes itself once the volume reaches zero, and setVolume alone
+  // will not bring it back - it has to be told to unmute explicitly. Muting
+  // and then unmuting otherwise leaves the video silent for good.
   function applyVolume() {
     if (!cur) return;
     var v = want.muted ? 0 : want.volume;
 
     if (cur.kind === 'file' && cur.el) {
+      cur.el.muted  = (v <= 0);
       cur.el.volume = v;
-    } else if (cur.api && cur.api.setVolume) {
-      // YouTube takes 0-100, Twitch takes 0-1
-      cur.api.setVolume(cur.kind === 'youtube' ? Math.round(v * 100) : v);
+      return;
+    }
+
+    if (!cur.api) return;
+
+    if (cur.kind === 'youtube') {
+      if (v <= 0) {
+        if (cur.api.mute) cur.api.mute();
+      } else {
+        if (cur.api.unMute) cur.api.unMute();
+        if (cur.api.setVolume) cur.api.setVolume(Math.round(v * 100));
+      }
+      return;
+    }
+
+    if (cur.kind === 'twitch') {
+      if (cur.api.setMuted) cur.api.setMuted(v <= 0);
+      if (cur.api.setVolume) cur.api.setVolume(v);
     }
   }
 
@@ -207,16 +226,20 @@
     var d = e.data || {};
 
     if (d.action === 'show') {
-      var changed = (d.url !== want.url) || (d.playing !== want.playing)
-                 || (d.muted !== want.muted);
+      // Only a new source or a power change rebuilds the player. Volume and
+      // mute must never restart the video - they used to, because the mute
+      // flag was part of this comparison.
+      var rebuild = (d.url !== want.url) || (!!d.playing !== want.playing);
+
       want.url     = d.url || null;
       want.playing = !!d.playing;
       want.seek    = d.seek || 0;
-      want.muted   = d.muted !== false;
+      want.muted   = (d.muted === true);   // absent means not muted
       want.volume  = (d.volume == null ? 1 : d.volume);
       want.origin  = d.origin || null;
       want.nocookie = !!d.nocookie;
-      if (changed) start(); else applyVolume();
+
+      if (rebuild) start(); else applyVolume();
       return;
     }
 
