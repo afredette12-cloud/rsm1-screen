@@ -1,22 +1,10 @@
 <!--
-  rf_rsm1h screen player
-  ----------------------
-  Publish this file on any https address and put that address in config.lua:
+  rf_rsm1h screen player  -  version 1.38.1
+  Published at https://afredette12-cloud.github.io/rsm1-screen/
 
-      playerUrl = 'https://yourname.github.io/rf-screen/'
-
-  GitHub Pages works and is free:
-    1. Make a public repo
-    2. Add this file as index.html
-    3. Settings -> Pages -> deploy from the main branch
-    4. Paste the resulting URL into playerUrl
-
-  Why: YouTube refuses an embed whose page has no real http origin. A DUI
-  served from nui:// has none, which is what "Error 153" is telling you.
-  Hosting the page anywhere on https gives it one.
-
-  The pad drives this page through SendDuiMessage, so nothing here needs
-  configuring - it just has to be reachable.
+  REPLACE index.html IN THE REPO WITH THIS FILE.
+  The version shows on the idle screen in game, so you can see at a glance
+  whether what is deployed matches your resource.
 -->
 <!DOCTYPE html>
 <html>
@@ -32,7 +20,9 @@
   #stage > * { position: absolute; inset: 0; width: 100%; height: 100%;
                border: 0; object-fit: contain; background: #000; }
   #idle { display: grid; place-items: center; color: #2a2a30;
-          font: 300 34px system-ui, sans-serif; letter-spacing: .18em; }
+          font: 300 34px system-ui, sans-serif; letter-spacing: .18em;
+          text-align: center; line-height: 1.5; }
+  #idle .ver { display: block; font-size: 13px; letter-spacing: .1em; color: #1e1e24; }
 </style>
 </head>
 <body>
@@ -52,11 +42,16 @@
     cur = null;
   }
 
+  // The version is on screen so a stale hosted page is obvious at a glance -
+  // this page lives outside the resource, so restarting the script cannot
+  // update it and there is otherwise no way to tell which one is deployed.
+  var PLAYER_VERSION = '1.38.1';
+
   function idle() {
     clear();
     var d = document.createElement('div');
     d.id = 'idle';
-    d.textContent = 'NO SIGNAL';
+    d.innerHTML = 'NO SIGNAL<span class="ver">player ' + PLAYER_VERSION + '</span>';
     stage.appendChild(d);
   }
 
@@ -101,41 +96,104 @@
   // so there is nothing valid to send. These are the documented mitigations;
   // if they do not take, the answer is `origin` in the config - a real https
   // page - or resolving the video to a direct file server-side.
+  // A bare YouTube iframe has no volume control at all - which is why it
+  // played at full blast whatever the pad said. Volume needs the IFrame API,
+  // so load it once and drive a real player object.
+  var ytReady = false, ytQueue = [];
+
+  function withYT(fn) {
+    if (ytReady && window.YT && window.YT.Player) return fn();
+    ytQueue.push(fn);
+    if (document.getElementById('yt-api')) return;
+
+    var tag = document.createElement('script');
+    tag.id  = 'yt-api';
+    tag.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(tag);
+  }
+
+  window.onYouTubeIframeAPIReady = function () {
+    ytReady = true;
+    var q = ytQueue; ytQueue = [];
+    q.forEach(function (fn) { fn(); });
+  };
+
+  function applyVolume() {
+    if (!cur) return;
+    var v = want.muted ? 0 : want.volume;
+
+    if (cur.kind === 'file' && cur.el) {
+      cur.el.volume = v;
+    } else if (cur.api && cur.api.setVolume) {
+      // YouTube takes 0-100, Twitch takes 0-1
+      cur.api.setVolume(cur.kind === 'youtube' ? Math.round(v * 100) : v);
+    }
+  }
+
   function playYouTube(id) {
     clear();
-    var host = want.nocookie ? 'https://www.youtube-nocookie.com'
-                             : 'https://www.youtube.com';
-    var ref  = want.origin || 'https://www.youtube.com';
+    var holder = document.createElement('div');
+    stage.appendChild(holder);
+    cur = { kind: 'youtube', el: holder, api: null };
 
-    var p = ['autoplay=1', 'controls=0', 'modestbranding=1', 'rel=0', 'playsinline=1',
-             'disablekb=1', 'fs=0', 'iv_load_policy=3',
-             'origin=' + encodeURIComponent(ref),
-             'widget_referrer=' + encodeURIComponent(ref),
-             'start=' + Math.floor(want.seek),
-             'mute=' + (want.muted ? 1 : 0)];
+    withYT(function () {
+      if (!cur || cur.el !== holder) return;      // switched away while loading
 
-    var f = document.createElement('iframe');
-    f.src = host + '/embed/' + id + '?' + p.join('&');
-    f.allow = 'autoplay; encrypted-media; picture-in-picture';
-    f.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
-    f.setAttribute('frameborder', '0');
-    stage.appendChild(f);
-    cur = { kind: 'youtube', el: f };
+      var ref = want.origin || 'https://www.youtube.com';
+      cur.api = new window.YT.Player(holder, {
+        videoId: id,
+        host: want.nocookie ? 'https://www.youtube-nocookie.com'
+                            : 'https://www.youtube.com',
+        playerVars: {
+          autoplay: 1, controls: 0, modestbranding: 1, rel: 0,
+          playsinline: 1, disablekb: 1, fs: 0, iv_load_policy: 3,
+          start: Math.floor(want.seek),
+          origin: ref, widget_referrer: ref
+        },
+        events: {
+          onReady: function (e) {
+            // set the volume before anything is audible
+            e.target.setVolume(want.muted ? 0 : Math.round(want.volume * 100));
+            if (want.muted) e.target.mute(); else e.target.unMute();
+            if (want.seek > 0) e.target.seekTo(want.seek, true);
+            e.target.playVideo();
+          }
+        }
+      });
+    });
   }
 
   function playTwitch(url) {
     clear();
-    var ch = twitchChannel(url), vid = twitchVideo(url);
-    var f  = document.createElement('iframe');
-    var q  = ['parent=cfx.re', 'parent=localhost', 'autoplay=true',
-              'muted=' + (want.muted ? 'true' : 'false')];
-    if (vid)      q.unshift('video=' + vid);
-    else if (ch)  q.unshift('channel=' + ch);
-    f.src = 'https://player.twitch.tv/?' + q.join('&');
-    f.allow = 'autoplay; encrypted-media';
-    f.setAttribute('frameborder', '0');
-    stage.appendChild(f);
-    cur = { kind: 'twitch', el: f };
+    var holder = document.createElement('div');
+    holder.id = 'tw-' + Date.now();
+    stage.appendChild(holder);
+    cur = { kind: 'twitch', el: holder, api: null };
+
+    var boot = function () {
+      if (!cur || cur.el !== holder || !window.Twitch || !window.Twitch.Player) return;
+
+      var ch = twitchChannel(url), vid = twitchVideo(url);
+      var opts = { width: '100%', height: '100%', autoplay: true,
+                   muted: want.muted, parent: ['cfx.re', 'localhost'] };
+      if (vid) opts.video = vid; else if (ch) opts.channel = ch;
+
+      cur.api = new window.Twitch.Player(holder.id, opts);
+      cur.api.addEventListener(window.Twitch.Player.READY, function () {
+        cur.api.setVolume(want.muted ? 0 : want.volume);
+      });
+    };
+
+    if (window.Twitch && window.Twitch.Player) return boot();
+
+    var tag = document.getElementById('tw-api');
+    if (!tag) {
+      tag = document.createElement('script');
+      tag.id  = 'tw-api';
+      tag.src = 'https://player.twitch.tv/js/embed/v1.js';
+      document.head.appendChild(tag);
+    }
+    tag.addEventListener('load', boot);
   }
 
   function start() {
@@ -161,14 +219,14 @@
       want.volume  = (d.volume == null ? 1 : d.volume);
       want.origin  = d.origin || null;
       want.nocookie = !!d.nocookie;
-      if (changed) start();
+      if (changed) start(); else applyVolume();
       return;
     }
 
     // distance falloff for anything we cannot route through the 3D graph
     if (d.action === 'volume') {
       want.volume = d.volume;
-      if (cur && cur.kind === 'file' && cur.el) cur.el.volume = d.volume;
+      applyVolume();
       return;
     }
 
