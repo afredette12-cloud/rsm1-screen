@@ -377,16 +377,25 @@ html, body {
 .card--dark .cc-btn.is-on { color: #fff; border-color: #fff; }
 
 .playbtn {
-  width: 44px; height: 44px; flex: 0 0 44px; border-radius: 50%;
-  border: 1px solid var(--line); background: var(--tile); cursor: pointer;
+  width: 46px; height: 46px; flex: 0 0 46px;
+  border: 0; background: transparent; cursor: pointer; border-radius: 8px;
   display: grid; place-items: center; color: var(--ink);
-  transition: background .15s, color .15s, border-color .15s;
+  transition: background .15s;
 }
-.playbtn svg { width: 20px; height: 20px; fill: currentColor; }
-.playbtn:not(.is-on) svg { margin-left: 3px; }     /* optically centre the triangle */
-.playbtn.is-on { background: var(--green); border-color: var(--green); color: #fff; }
-.card--dark .playbtn { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.14); color: #fff; }
-.card--dark .playbtn.is-on { background: var(--green); border-color: var(--green); }
+.playbtn:hover { background: rgba(0,0,0,.06); }
+.card--dark .playbtn { color: #fff; }
+.card--dark .playbtn:hover { background: rgba(255,255,255,.1); }
+.playbtn svg { width: 30px; height: 30px; fill: currentColor; }
+
+/* two quads forming a triangle, morphing into two bars. Same point count in
+   both, so the transition slides the corners rather than cutting. */
+.playbtn .pp {
+  d: path("M 6 5 L 12.5 8.75 L 12.5 15.25 L 6 19 Z M 12.5 8.75 L 19 12 L 19 12 L 12.5 15.25 Z");
+  transition: d .24s cubic-bezier(.4, 0, .2, 1);
+}
+.playbtn.is-on .pp {
+  d: path("M 6 5 L 10 5 L 10 19 L 6 19 Z M 14 5 L 18 5 L 18 19 L 14 19 Z");
+}
 
 .card--screen .card-visual { display: grid; place-items: center; }
 .tv {
@@ -2146,8 +2155,9 @@ html, body {
     return (S.doors || []).filter(function (d) { return d.locked; }).length;
   }
 
-  var ICON_PLAY  = '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>';
-  var ICON_PAUSE = '<svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>';
+  // The play triangle is drawn as two quads that share an edge, so the same
+  // eight points can slide apart into the two pause bars - YouTube's morph.
+  var ICON_PP = '<svg viewBox="0 0 24 24"><path class="pp"/></svg>';
 
   function screenCard(sc) {
     var power = sc.power !== false;
@@ -2171,8 +2181,7 @@ html, body {
             '</p>' +
           '</div>' +
           '<button class="playbtn' + (on ? ' is-on' : '') + '" data-screen-toggle ' +
-                  'title="' + (on ? t('pause') : t('play')) + '">' +
-            (on ? ICON_PAUSE : ICON_PLAY) + '</button>' +
+                  'title="' + (on ? t('pause') : t('play')) + '">' + ICON_PP + '</button>' +
         '</div>' +
         '<div class="card-control">' +
           '<div class="pick-url">' +
@@ -2939,7 +2948,7 @@ html, body {
       '<div class="section-head">' + t('support_title') + '</div>' +
       '<div class="info-row"><span>Property</span><span>' + (S.property ? S.property.label : '-') + '</span></div>' +
       '<div class="info-row"><span>Panel</span><span>' + (S.property && S.property.pad ? S.property.pad : '-') + '</span></div>' +
-      '<div class="info-row"><span>Controller</span><span>rf_rsm1h 1.49.1</span></div>' +
+      '<div class="info-row"><span>Controller</span><span>rf_rsm1h 1.49.2</span></div>' +
       '<div class="info-row"><span>Local time</span><span>' + (S.env.clock || '--:--') + '</span></div>'
     ));
   }
@@ -3830,8 +3839,7 @@ html, body {
         var power = sc.power !== false;
         var on    = power && sc.playing && sc.url;
         var pb = host.querySelector('[data-screen-toggle]');
-        pb.classList.toggle('is-on', !!on);
-        pb.innerHTML = on ? ICON_PAUSE : ICON_PLAY;
+        pb.classList.toggle('is-on', !!on);      // the CSS morphs the path
         pb.title = on ? t('pause') : t('play');
         var tv = host.querySelector('.tv');
         tv.classList.toggle('is-on', !!on);
